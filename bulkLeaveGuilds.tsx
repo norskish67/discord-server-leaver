@@ -1,8 +1,3 @@
-/*
- * Vencord, a Discord client mod
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
-
 import definePlugin from "@utils/types";
 import { ModalRoot, ModalSize, openModal } from "@utils/modal";
 import { Button, Forms, GuildStore, React, RestAPI, TextInput, UserStore } from "@webpack/common";
@@ -17,12 +12,94 @@ type GuildLike = {
     partnered?: boolean;
 };
 
+type LogLine = { level: "INFO" | "OK" | "WARN" | "ERR"; text: string; time: number };
+
+const S = {
+    modal: { padding: 0, display: "flex", flexDirection: "column" as const },
+    stickyTop: {
+        position: "sticky" as const,
+        top: 0,
+        zIndex: 2,
+        background: "var(--background-primary)",
+        borderBottom: "1px solid var(--background-modifier-accent)"
+    },
+    stickyBottom: { position: "sticky" as const, bottom: 0, zIndex: 2 },
+    headerPad: { padding: 14, display: "flex", flexDirection: "column" as const, gap: 10 },
+    row: { display: "flex", alignItems: "center", gap: 10 },
+    rowWrap: { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" as const },
+    chip: {
+        display: "inline-flex",
+        alignItems: "center",
+        padding: "3px 10px",
+        borderRadius: 999,
+        fontSize: 12,
+        background: "var(--background-modifier-accent)",
+        color: "var(--text-normal)",
+        opacity: 0.92
+    },
+    tabBtn: (active: boolean) => ({
+        padding: "6px 10px",
+        borderRadius: 999,
+        border: "1px solid var(--background-modifier-accent)",
+        background: active ? "var(--background-modifier-selected)" : "transparent",
+        color: "var(--text-normal)",
+        cursor: "pointer",
+        fontSize: 13
+    }),
+    card: {
+        border: "1px solid var(--background-modifier-accent)",
+        borderRadius: 14,
+        background: "var(--background-secondary)",
+        overflow: "hidden" as const
+    },
+    cardPad: { padding: 12 },
+    list: { maxHeight: 440, overflow: "auto" as const, background: "var(--background-secondary)" },
+    footer: {
+        padding: 12,
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        background: "var(--background-tertiary)",
+        borderTop: "1px solid var(--background-modifier-accent)"
+    },
+    inputNum: {
+        width: 110,
+        padding: "6px 8px",
+        borderRadius: 10,
+        border: "1px solid var(--background-modifier-accent)",
+        background: "var(--background-secondary)",
+        color: "var(--text-normal)"
+    },
+    select: {
+        padding: "6px 8px",
+        borderRadius: 10,
+        border: "1px solid var(--background-modifier-accent)",
+        background: "var(--background-secondary)",
+        color: "var(--text-normal)"
+    },
+    warnBox: {
+        border: "1px solid rgba(255, 180, 0, 0.35)",
+        background: "rgba(255, 180, 0, 0.06)",
+        borderRadius: 12,
+        padding: 10
+    }
+};
+
+function Chip({ children }: { children: React.ReactNode }) {
+    return <span style={S.chip}>{children}</span>;
+}
+
+function Card({ children }: { children: React.ReactNode }) {
+    return <div style={S.card}>{children}</div>;
+}
+
 function getAllGuilds(): GuildLike[] {
     const obj = GuildStore.getGuilds?.() ?? {};
     const arr = Object.values(obj) as any[];
+
     return arr.map(g => ({
         id: g.id,
-        name: g.name,
+        name: g.name ?? "(unknown)",
         icon: g.icon,
         ownerId: g.ownerId ?? g.owner_id,
         memberCount: g.memberCount ?? g.approximate_member_count,
@@ -31,7 +108,7 @@ function getAllGuilds(): GuildLike[] {
     }));
 }
 
-function guildIconUrl(g: GuildLike) {
+function iconUrl(g: GuildLike) {
     if (!g.icon) return null;
     return `https://cdn.discordapp.com/icons/${g.id}/${g.icon}.png?size=64`;
 }
@@ -41,135 +118,54 @@ function sleep(ms: number) {
 }
 
 async function leaveGuild(guildId: string) {
-    // Discord route: DELETE /users/@me/guilds/{guild.id}
     return RestAPI.del({ url: `/users/@me/guilds/${guildId}`, oldFormErrors: true });
 }
 
-function Chip({ children }: { children: React.ReactNode }) {
-    return (
-        <span
-            style={{
-                display: "inline-flex",
-                alignItems: "center",
-                padding: "3px 10px",
-                borderRadius: 999,
-                fontSize: 12,
-                background: "var(--background-modifier-accent)",
-                color: "var(--text-normal)",
-                opacity: 0.92
-            }}
-        >
-            {children}
-        </span>
-    );
-}
-
-function SectionCard({ children }: { children: React.ReactNode }) {
-    return (
-        <div
-            style={{
-                border: "1px solid var(--background-modifier-accent)",
-                borderRadius: 14,
-                background: "var(--background-secondary)",
-                overflow: "hidden"
-            }}
-        >
-            {children}
-        </div>
-    );
-}
-
-function Row({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
-    return (
-        <div style={{ display: "flex", alignItems: "center", gap: 10, ...style }}>
-            {children}
-        </div>
-    );
-}
-
-function TabButton({
-    active,
-    onClick,
-    children
-}: {
-    active: boolean;
-    onClick: () => void;
-    children: React.ReactNode;
-}) {
-    return (
-        <button
-            onClick={onClick}
-            style={{
-                padding: "6px 10px",
-                borderRadius: 999,
-                border: "1px solid var(--background-modifier-accent)",
-                background: active ? "var(--background-modifier-selected)" : "transparent",
-                color: "var(--text-normal)",
-                cursor: "pointer",
-                fontSize: 13
-            }}
-        >
-            {children}
-        </button>
-    );
+function formatCount(n?: number) {
+    return typeof n === "number" ? n.toLocaleString() : null;
 }
 
 function BulkLeaveModal(props: any) {
-    // Live data
+    const currentUserId = UserStore.getCurrentUser?.()?.id;
+
+    const [tab, setTab] = React.useState<"servers" | "run" | "settings">("servers");
+
     const [guilds, setGuilds] = React.useState<GuildLike[]>(() => getAllGuilds());
     const [autoRefresh, setAutoRefresh] = React.useState(true);
 
-    // UI state
-    const [tab, setTab] = React.useState<"servers" | "log" | "settings">("servers");
     const [query, setQuery] = React.useState("");
     const [selected, setSelected] = React.useState<Record<string, boolean>>({});
-    const [busy, setBusy] = React.useState(false);
 
-    // Filters
+    const [hideOwned, setHideOwned] = React.useState(true);
     const [hideVerified, setHideVerified] = React.useState(false);
     const [hideLarge, setHideLarge] = React.useState(false);
     const [largeThreshold, setLargeThreshold] = React.useState(10000);
-    const [hideOwned, setHideOwned] = React.useState(true);
     const [showSelectedOnly, setShowSelectedOnly] = React.useState(false);
 
-    // Sort
     const [sortMode, setSortMode] = React.useState<"name" | "members_desc" | "members_asc">("name");
 
-    // Safety + execution
+    const [delayMs, setDelayMs] = React.useState(800);
+    const [confirmOver, setConfirmOver] = React.useState(10);
     const [confirmText, setConfirmText] = React.useState("");
-    const [requireConfirmOver, setRequireConfirmOver] = React.useState(10);
-    const [delayMs, setDelayMs] = React.useState(450);
+
+    const [busy, setBusy] = React.useState(false);
     const cancelRef = React.useRef(false);
 
-    // Logging
-    const [log, setLog] = React.useState<Array<{ ok: boolean; text: string }>>([]);
+    const [log, setLog] = React.useState<LogLine[]>([]);
     const [progress, setProgress] = React.useState({ done: 0, total: 0 });
 
-    // current user for owned detection
-    const currentUserId = UserStore.getCurrentUser?.()?.id;
+    const pushLog = React.useCallback((level: LogLine["level"], text: string) => {
+        setLog(prev => [{ level, text, time: Date.now() }, ...prev].slice(0, 500));
+    }, []);
 
-    // Auto refresh guild list while modal is open
+    const isOwned = React.useCallback(
+        (g: GuildLike) => !!(currentUserId && g.ownerId && g.ownerId === currentUserId),
+        [currentUserId]
+    );
+
     React.useEffect(() => {
         if (!autoRefresh) return;
-
-        const t = setInterval(() => {
-            setGuilds(prev => {
-                const next = getAllGuilds();
-                // Avoid rerender spam if identical length and ids
-                if (prev.length === next.length) {
-                    let same = true;
-                    for (let i = 0; i < prev.length; i++) {
-                        if (prev[i].id !== next[i].id) {
-                            same = false;
-                            break;
-                        }
-                    }
-                    if (same) return prev;
-                }
-                return next;
-            });
-        }, 1000);
-
+        const t = setInterval(() => setGuilds(getAllGuilds()), 1200);
         return () => clearInterval(t);
     }, [autoRefresh]);
 
@@ -178,44 +174,24 @@ function BulkLeaveModal(props: any) {
         [selected]
     );
 
-    function isOwned(g: GuildLike) {
-        return !!(currentUserId && g.ownerId && g.ownerId === currentUserId);
-    }
+    const needsConfirm = selectedIds.length >= confirmOver;
 
     const filtered = React.useMemo(() => {
         const q = query.trim().toLowerCase();
-
         let list = guilds;
 
-        if (hideOwned && currentUserId) {
-            list = list.filter(g => !isOwned(g));
-        }
+        if (hideOwned && currentUserId) list = list.filter(g => !isOwned(g));
+        if (hideVerified) list = list.filter(g => !(g.verified || g.partnered));
+        if (hideLarge) list = list.filter(g => typeof g.memberCount !== "number" || g.memberCount < largeThreshold);
 
-        if (hideVerified) {
-            list = list.filter(g => !(g.verified || g.partnered));
-        }
-
-        if (hideLarge) {
-            list = list.filter(g => typeof g.memberCount !== "number" || g.memberCount < largeThreshold);
-        }
-
-        if (q) {
-            list = list.filter(g => g.name.toLowerCase().includes(q) || g.id.includes(q));
-        }
-
-        if (showSelectedOnly) {
-            const sel = selected;
-            list = list.filter(g => !!sel[g.id]);
-        }
+        if (q) list = list.filter(g => g.name.toLowerCase().includes(q) || g.id.includes(q));
+        if (showSelectedOnly) list = list.filter(g => !!selected[g.id]);
 
         list = [...list];
-        if (sortMode === "name") {
-            list.sort((a, b) => a.name.localeCompare(b.name));
-        } else if (sortMode === "members_desc") {
-            list.sort((a, b) => (b.memberCount ?? -1) - (a.memberCount ?? -1));
-        } else {
-            list.sort((a, b) => (a.memberCount ?? 1e18) - (b.memberCount ?? 1e18));
-        }
+
+        if (sortMode === "name") list.sort((a, b) => a.name.localeCompare(b.name));
+        if (sortMode === "members_desc") list.sort((a, b) => (b.memberCount ?? -1) - (a.memberCount ?? -1));
+        if (sortMode === "members_asc") list.sort((a, b) => (a.memberCount ?? 1e18) - (b.memberCount ?? 1e18));
 
         return list;
     }, [
@@ -228,64 +204,59 @@ function BulkLeaveModal(props: any) {
         showSelectedOnly,
         sortMode,
         selected,
-        currentUserId
+        currentUserId,
+        isOwned
     ]);
 
-    function toggle(id: string) {
-        setSelected(prev => ({ ...prev, [id]: !prev[id] }));
-    }
+    const pct = progress.total ? Math.round((progress.done / progress.total) * 100) : 0;
 
-    function selectAllShown() {
+    const toggle = (id: string) => setSelected(prev => ({ ...prev, [id]: !prev[id] }));
+
+    const selectShown = () =>
         setSelected(prev => {
             const next = { ...prev };
             for (const g of filtered) next[g.id] = true;
             return next;
         });
-    }
 
-    function clearSelection() {
-        setSelected({});
-    }
-
-    function invertShown() {
+    const invertShown = () =>
         setSelected(prev => {
             const next = { ...prev };
             for (const g of filtered) next[g.id] = !next[g.id];
             return next;
         });
-    }
 
-    function reloadNow() {
+    const clearSelection = () => setSelected({});
+
+    const reloadNow = () => {
         setGuilds(getAllGuilds());
-        setLog(prev => [{ ok: true, text: "🔄 Reloaded server list." }, ...prev]);
-    }
-
-    const needsConfirm = selectedIds.length >= requireConfirmOver;
+        pushLog("INFO", "Reloaded server list.");
+    };
 
     async function doLeaveSelected() {
         const ids = selectedIds;
 
         if (ids.length === 0) {
-            setLog(prev => [{ ok: false, text: "⚠️ Select at least one server first." }, ...prev]);
-            setTab("log");
+            pushLog("WARN", "Select at least one server first.");
+            setTab("run");
             return;
         }
 
         if (needsConfirm && confirmText.trim().toUpperCase() !== "LEAVE") {
-            setLog(prev => [{ ok: false, text: `⚠️ Type LEAVE to confirm leaving ${ids.length} servers.` }, ...prev]);
-            setTab("log");
+            pushLog("WARN", `Type LEAVE to confirm leaving ${ids.length} servers.`);
+            setTab("run");
             return;
         }
 
         cancelRef.current = false;
         setBusy(true);
         setProgress({ done: 0, total: ids.length });
-        setLog(prev => [{ ok: true, text: `▶️ Starting: leaving ${ids.length} server(s)…` }, ...prev]);
-        setTab("log");
+        pushLog("INFO", `Starting run: leaving ${ids.length} server(s).`);
+        setTab("run");
 
         for (let i = 0; i < ids.length; i++) {
             if (cancelRef.current) {
-                setLog(prev => [{ ok: false, text: "⏹ Cancelled by user." }, ...prev]);
+                pushLog("WARN", "Run cancelled by user.");
                 break;
             }
 
@@ -293,19 +264,35 @@ function BulkLeaveModal(props: any) {
             const g = guilds.find(x => x.id === id);
             const name = g?.name ?? id;
 
-            // Skip owned (Discord blocks it), but be explicit
             if (g && isOwned(g)) {
-                setLog(prev => [{ ok: false, text: `⛔ Skipped (owned): ${name}` }, ...prev]);
+                pushLog("WARN", `Skipped (owned): ${name}`);
                 setProgress({ done: i + 1, total: ids.length });
                 continue;
             }
 
             try {
                 await leaveGuild(id);
-                setLog(prev => [{ ok: true, text: `✅ Left: ${name}` }, ...prev]);
+                pushLog("OK", `Left: ${name}`);
             } catch (e: any) {
-                const msg = String(e?.message ?? e);
-                setLog(prev => [{ ok: false, text: `❌ Failed: ${name} (${msg})` }, ...prev]);
+                const status = e?.status ?? e?.response?.status;
+                const retryAfter = e?.body?.retry_after ?? e?.retry_after;
+
+                if (status === 429 && retryAfter) {
+                    const waitMs = Math.ceil(Number(retryAfter) * 1000) + 250;
+                    pushLog("WARN", `Rate limited. Waiting ${Math.round(waitMs / 1000)}s…`);
+                    await sleep(waitMs);
+
+                    // one retry
+                    try {
+                        await leaveGuild(id);
+                        pushLog("OK", `Left: ${name} (after retry)`);
+                    } catch (e2: any) {
+                        pushLog("ERR", `Failed: ${name} (rate limit retry failed)`);
+                    }
+                } else {
+                    const msg = String(e?.message ?? e);
+                    pushLog("ERR", `Failed: ${name} (${msg})`);
+                }
             }
 
             setProgress({ done: i + 1, total: ids.length });
@@ -314,31 +301,30 @@ function BulkLeaveModal(props: any) {
 
         setBusy(false);
         setConfirmText("");
+        pushLog("INFO", "Run finished.");
     }
 
-    const pct = progress.total ? Math.round((progress.done / progress.total) * 100) : 0;
-
     const Header = (
-        <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
-            <Row style={{ justifyContent: "space-between" }}>
+        <div style={S.headerPad}>
+            <div style={{ ...S.rowWrap, justifyContent: "space-between" }}>
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                     <Forms.FormTitle>Bulk Leave Servers</Forms.FormTitle>
-                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                    <div style={S.rowWrap}>
                         <Chip>Selected: {selectedIds.length}</Chip>
                         <Chip>Shown: {filtered.length}</Chip>
-                        {busy ? <Chip>Leaving… {pct}%</Chip> : <Chip>Ready</Chip>}
-                        {autoRefresh ? <Chip>Auto-refresh: ON</Chip> : <Chip>Auto-refresh: OFF</Chip>}
+                        {busy ? <Chip>Running: {pct}%</Chip> : <Chip>Idle</Chip>}
+                        {autoRefresh ? <Chip>Auto-refresh</Chip> : <Chip>Manual</Chip>}
                     </div>
                 </div>
 
-                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                    <TabButton active={tab === "servers"} onClick={() => setTab("servers")}>Servers</TabButton>
-                    <TabButton active={tab === "log"} onClick={() => setTab("log")}>Log</TabButton>
-                    <TabButton active={tab === "settings"} onClick={() => setTab("settings")}>Settings</TabButton>
+                <div style={S.rowWrap}>
+                    <button style={S.tabBtn(tab === "servers")} onClick={() => setTab("servers")}>Servers</button>
+                    <button style={S.tabBtn(tab === "run")} onClick={() => setTab("run")}>Run</button>
+                    <button style={S.tabBtn(tab === "settings")} onClick={() => setTab("settings")}>Settings</button>
                 </div>
-            </Row>
+            </div>
 
-            <Row style={{ flexWrap: "wrap" }}>
+            <div style={S.rowWrap}>
                 <div style={{ flex: 1, minWidth: 260 }}>
                     <TextInput
                         value={query}
@@ -348,44 +334,27 @@ function BulkLeaveModal(props: any) {
                     />
                 </div>
 
-                <Button onClick={selectAllShown} disabled={busy || filtered.length === 0}>
-                    Select shown
-                </Button>
-                <Button onClick={invertShown} disabled={busy || filtered.length === 0}>
-                    Invert shown
-                </Button>
-                <Button onClick={clearSelection} disabled={busy || selectedIds.length === 0}>
-                    Clear selection
-                </Button>
-                <Button onClick={reloadNow} disabled={busy}>
-                    Reload
-                </Button>
-            </Row>
+                <Button onClick={selectShown} disabled={busy || filtered.length === 0}>Select shown</Button>
+                <Button onClick={invertShown} disabled={busy || filtered.length === 0}>Invert shown</Button>
+                <Button onClick={clearSelection} disabled={busy || selectedIds.length === 0}>Clear</Button>
+                <Button onClick={reloadNow} disabled={busy}>Reload</Button>
+            </div>
         </div>
     );
 
     const Footer = (
-        <div
-            style={{
-                padding: 12,
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                background: "var(--background-tertiary)",
-                borderTop: "1px solid var(--background-modifier-accent)"
-            }}
-        >
+        <div style={S.footer}>
             <div style={{ fontSize: 13, opacity: 0.9 }}>
-                {busy ? `Leaving… ${progress.done}/${progress.total}` : `Ready. ${needsConfirm ? "Type LEAVE to confirm." : ""}`}
+                {busy ? `Leaving… ${progress.done}/${progress.total}` : "Ready"}
             </div>
 
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <div style={S.rowWrap}>
                 {busy && (
-                    <Button onClick={() => { cancelRef.current = true; }}>
+                    <Button onClick={() => (cancelRef.current = true)} color={Button.Colors.RED}>
                         Cancel
                     </Button>
                 )}
-                <Button onClick={doLeaveSelected} disabled={busy || selectedIds.length === 0}>
+                <Button onClick={doLeaveSelected} disabled={busy || selectedIds.length === 0} color={Button.Colors.RED}>
                     Leave selected
                 </Button>
             </div>
@@ -394,42 +363,32 @@ function BulkLeaveModal(props: any) {
 
     const ServersTab = (
         <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
-            <SectionCard>
-                <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
-                    <Row style={{ flexWrap: "wrap" }}>
-                        <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13, opacity: 0.9 }}>
+            <Card>
+                <div style={S.cardPad}>
+                    <div style={S.rowWrap}>
+                        <label style={{ ...S.row, fontSize: 13, opacity: 0.9 }}>
                             <input
                                 type="checkbox"
                                 checked={hideOwned}
                                 onChange={e => setHideOwned(e.currentTarget.checked)}
                                 disabled={busy || !currentUserId}
                             />
-                            Hide owned (recommended)
+                            Hide owned
                         </label>
 
-                        <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13, opacity: 0.9 }}>
-                            <input
-                                type="checkbox"
-                                checked={hideVerified}
-                                onChange={e => setHideVerified(e.currentTarget.checked)}
-                                disabled={busy}
-                            />
+                        <label style={{ ...S.row, fontSize: 13, opacity: 0.9 }}>
+                            <input type="checkbox" checked={hideVerified} onChange={e => setHideVerified(e.currentTarget.checked)} disabled={busy} />
                             Hide verified/partnered
                         </label>
 
-                        <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13, opacity: 0.9 }}>
-                            <input
-                                type="checkbox"
-                                checked={hideLarge}
-                                onChange={e => setHideLarge(e.currentTarget.checked)}
-                                disabled={busy}
-                            />
-                            Hide big servers
+                        <label style={{ ...S.row, fontSize: 13, opacity: 0.9 }}>
+                            <input type="checkbox" checked={hideLarge} onChange={e => setHideLarge(e.currentTarget.checked)} disabled={busy} />
+                            Hide large
                         </label>
 
                         {hideLarge && (
-                            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                                <span style={{ fontSize: 13, opacity: 0.85 }}>Threshold:</span>
+                            <label style={{ ...S.row, fontSize: 13, opacity: 0.9 }}>
+                                Threshold
                                 <input
                                     type="number"
                                     min={100}
@@ -437,59 +396,34 @@ function BulkLeaveModal(props: any) {
                                     value={largeThreshold}
                                     onChange={e => setLargeThreshold(Math.max(100, Number(e.currentTarget.value || 10000)))}
                                     disabled={busy}
-                                    style={{
-                                        width: 110,
-                                        padding: "6px 8px",
-                                        borderRadius: 8,
-                                        border: "1px solid var(--background-modifier-accent)",
-                                        background: "var(--background-secondary)",
-                                        color: "var(--text-normal)"
-                                    }}
+                                    style={S.inputNum}
                                 />
-                            </div>
+                            </label>
                         )}
-                    </Row>
 
-                    <Row style={{ flexWrap: "wrap" }}>
-                        <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13, opacity: 0.9 }}>
-                            <input
-                                type="checkbox"
-                                checked={showSelectedOnly}
-                                onChange={e => setShowSelectedOnly(e.currentTarget.checked)}
-                                disabled={busy}
-                            />
+                        <label style={{ ...S.row, fontSize: 13, opacity: 0.9 }}>
+                            <input type="checkbox" checked={showSelectedOnly} onChange={e => setShowSelectedOnly(e.currentTarget.checked)} disabled={busy} />
                             Show selected only
                         </label>
 
-                        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                            <span style={{ fontSize: 13, opacity: 0.85 }}>Sort:</span>
-                            <select
-                                value={sortMode}
-                                onChange={e => setSortMode(e.currentTarget.value as any)}
-                                disabled={busy}
-                                style={{
-                                    padding: "6px 8px",
-                                    borderRadius: 8,
-                                    border: "1px solid var(--background-modifier-accent)",
-                                    background: "var(--background-secondary)",
-                                    color: "var(--text-normal)"
-                                }}
-                            >
+                        <div style={S.row}>
+                            <span style={{ fontSize: 13, opacity: 0.85 }}>Sort</span>
+                            <select value={sortMode} onChange={e => setSortMode(e.currentTarget.value as any)} disabled={busy} style={S.select}>
                                 <option value="name">Name</option>
                                 <option value="members_desc">Members (high → low)</option>
                                 <option value="members_asc">Members (low → high)</option>
                             </select>
                         </div>
-                    </Row>
+                    </div>
                 </div>
-            </SectionCard>
+            </Card>
 
-            <SectionCard>
-                <div style={{ maxHeight: 420, overflow: "auto", background: "var(--background-secondary)" }}>
+            <Card>
+                <div style={S.list}>
                     {filtered.map((g, idx) => {
-                        const icon = guildIconUrl(g);
                         const isSel = !!selected[g.id];
                         const owned = isOwned(g);
+                        const icon = iconUrl(g);
 
                         return (
                             <div
@@ -503,12 +437,6 @@ function BulkLeaveModal(props: any) {
                                     cursor: busy ? "not-allowed" : "pointer",
                                     background: isSel ? "var(--background-modifier-selected)" : "transparent",
                                     borderBottom: idx === filtered.length - 1 ? "none" : "1px solid var(--background-modifier-accent)"
-                                }}
-                                onMouseEnter={e => {
-                                    if (!busy && !isSel) e.currentTarget.style.background = "var(--background-modifier-hover)";
-                                }}
-                                onMouseLeave={e => {
-                                    if (!busy && !isSel) e.currentTarget.style.background = "transparent";
                                 }}
                             >
                                 <input
@@ -526,19 +454,14 @@ function BulkLeaveModal(props: any) {
                                         borderRadius: 999,
                                         overflow: "hidden",
                                         background: "var(--background-modifier-accent)",
-                                        flex: "0 0 auto",
                                         display: "flex",
                                         alignItems: "center",
                                         justifyContent: "center",
-                                        fontSize: 12,
-                                        opacity: 0.95
+                                        flex: "0 0 auto",
+                                        fontSize: 12
                                     }}
                                 >
-                                    {icon ? (
-                                        <img src={icon} width={34} height={34} style={{ display: "block" }} />
-                                    ) : (
-                                        <span>{g.name.slice(0, 2).toUpperCase()}</span>
-                                    )}
+                                    {icon ? <img src={icon} width={34} height={34} style={{ display: "block" }} /> : <span>{g.name.slice(0, 2).toUpperCase()}</span>}
                                 </div>
 
                                 <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
@@ -547,55 +470,53 @@ function BulkLeaveModal(props: any) {
                                     </span>
                                     <span style={{ opacity: 0.7, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                                         {g.id}
-                                        {typeof g.memberCount === "number" ? ` • ${g.memberCount.toLocaleString()} members` : ""}
+                                        {formatCount(g.memberCount) ? ` • ${formatCount(g.memberCount)} members` : ""}
                                         {g.verified ? " • verified" : ""}
                                         {g.partnered ? " • partnered" : ""}
-                                        {owned ? " • OWNED" : ""}
+                                        {owned ? " • owned" : ""}
                                     </span>
                                 </div>
                             </div>
                         );
                     })}
 
-                    {filtered.length === 0 && (
-                        <div style={{ padding: 14, opacity: 0.7 }}>No servers match.</div>
-                    )}
+                    {filtered.length === 0 && <div style={{ padding: 14, opacity: 0.7 }}>No servers match your filters.</div>}
                 </div>
-            </SectionCard>
+            </Card>
         </div>
     );
 
-    const LogTab = (
+    const RunTab = (
         <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
-            <SectionCard>
-                <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
-                    <Row style={{ justifyContent: "space-between", flexWrap: "wrap" }}>
-                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                            <Chip>{busy ? `Progress: ${pct}%` : "No active run"}</Chip>
-                            <Chip>{busy ? `${progress.done}/${progress.total}` : `${log.length} log line(s)`}</Chip>
-                        </div>
-                        <Button onClick={() => setLog([])} disabled={busy || log.length === 0}>
-                            Clear log
-                        </Button>
-                    </Row>
-
-                    {needsConfirm && (
-                        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                            <Forms.FormText>
-                                Safety: You selected {selectedIds.length} servers. Type <b>LEAVE</b> to enable the button.
-                            </Forms.FormText>
-                            <TextInput
-                                value={confirmText}
-                                onChange={(v: string) => setConfirmText(v)}
-                                placeholder="Type LEAVE to confirm…"
-                                disabled={busy}
-                            />
-                        </div>
-                    )}
+            {needsConfirm && (
+                <div style={S.warnBox}>
+                    <Forms.FormText>
+                        You selected <b>{selectedIds.length}</b> servers. Type <b>LEAVE</b> to enable the run.
+                    </Forms.FormText>
+                    <div style={{ marginTop: 8, maxWidth: 320 }}>
+                        <TextInput
+                            value={confirmText}
+                            onChange={(v: string) => setConfirmText(v)}
+                            placeholder="Type LEAVE to confirm…"
+                            disabled={busy}
+                        />
+                    </div>
                 </div>
-            </SectionCard>
+            )}
 
-            <SectionCard>
+            <Card>
+                <div style={{ ...S.cardPad, display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+                    <div style={S.rowWrap}>
+                        <Chip>{busy ? `Progress: ${pct}%` : "No active run"}</Chip>
+                        <Chip>{busy ? `${progress.done}/${progress.total}` : `${log.length} log entries`}</Chip>
+                    </div>
+                    <Button onClick={() => setLog([])} disabled={busy || log.length === 0}>
+                        Clear log
+                    </Button>
+                </div>
+            </Card>
+
+            <Card>
                 <div
                     style={{
                         padding: 10,
@@ -606,119 +527,77 @@ function BulkLeaveModal(props: any) {
                     }}
                 >
                     {log.length === 0 ? (
-                        <div style={{ opacity: 0.7 }}>No log yet. Start a run and results will appear here.</div>
+                        <div style={{ opacity: 0.7 }}>Log is empty. Start a run to see output here.</div>
                     ) : (
-                        log.map((line, idx) => (
-                            <div key={idx} style={{ fontSize: 12, padding: "2px 0", opacity: line.ok ? 0.95 : 0.85 }}>
-                                {line.text}
+                        log.map((l, i) => (
+                            <div key={i} style={{ fontSize: 12, padding: "2px 0", opacity: 0.92 }}>
+                                <span style={{ opacity: 0.75 }}>
+                                    [{new Date(l.time).toLocaleTimeString()}] [{l.level}]
+                                </span>{" "}
+                                {l.text}
                             </div>
                         ))
                     )}
                 </div>
-            </SectionCard>
+            </Card>
         </div>
     );
 
     const SettingsTab = (
         <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
-            <SectionCard>
-                <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 12 }}>
-                    <Row style={{ justifyContent: "space-between", flexWrap: "wrap" }}>
-                        <div>
-                            <Forms.FormTitle tag="h3">Execution</Forms.FormTitle>
-                            <Forms.FormText>Controls for rate limits + safety.</Forms.FormText>
-                        </div>
-                    </Row>
+            <Card>
+                <div style={S.cardPad}>
+                    <Forms.FormTitle tag="h3">Safety & rate limits</Forms.FormTitle>
+                    <Forms.FormText>
+                        Slower is safer. Discord can rate limit mass actions; this tool adds delays and basic 429 pausing.
+                    </Forms.FormText>
 
-                    <Row style={{ flexWrap: "wrap" }}>
-                        <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13, opacity: 0.9 }}>
-                            Delay (ms) between leaves:
+                    <div style={{ ...S.rowWrap, marginTop: 10 }}>
+                        <label style={{ ...S.row, fontSize: 13, opacity: 0.9 }}>
+                            Delay between leaves (ms)
                             <input
                                 type="number"
                                 min={0}
                                 step={50}
                                 value={delayMs}
-                                onChange={e => setDelayMs(Math.max(0, Number(e.currentTarget.value || 450)))}
+                                onChange={e => setDelayMs(Math.max(0, Number(e.currentTarget.value || 800)))}
                                 disabled={busy}
-                                style={{
-                                    width: 110,
-                                    padding: "6px 8px",
-                                    borderRadius: 8,
-                                    border: "1px solid var(--background-modifier-accent)",
-                                    background: "var(--background-secondary)",
-                                    color: "var(--text-normal)"
-                                }}
+                                style={S.inputNum}
                             />
                         </label>
 
-                        <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13, opacity: 0.9 }}>
-                            Require typing LEAVE at:
+                        <label style={{ ...S.row, fontSize: 13, opacity: 0.9 }}>
+                            Require LEAVE at
                             <input
                                 type="number"
                                 min={1}
                                 step={1}
-                                value={requireConfirmOver}
-                                onChange={e => setRequireConfirmOver(Math.max(1, Number(e.currentTarget.value || 10)))}
+                                value={confirmOver}
+                                onChange={e => setConfirmOver(Math.max(1, Number(e.currentTarget.value || 10)))}
                                 disabled={busy}
-                                style={{
-                                    width: 90,
-                                    padding: "6px 8px",
-                                    borderRadius: 8,
-                                    border: "1px solid var(--background-modifier-accent)",
-                                    background: "var(--background-secondary)",
-                                    color: "var(--text-normal)"
-                                }}
+                                style={{ ...S.inputNum, width: 90 }}
                             />
                             servers+
                         </label>
-                    </Row>
 
-                    <Row style={{ flexWrap: "wrap" }}>
-                        <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13, opacity: 0.9 }}>
-                            <input
-                                type="checkbox"
-                                checked={autoRefresh}
-                                onChange={e => setAutoRefresh(e.currentTarget.checked)}
-                                disabled={busy}
-                            />
-                            Auto-refresh server list (recommended)
+                        <label style={{ ...S.row, fontSize: 13, opacity: 0.9 }}>
+                            <input type="checkbox" checked={autoRefresh} onChange={e => setAutoRefresh(e.currentTarget.checked)} disabled={busy} />
+                            Auto-refresh server list
                         </label>
-                    </Row>
-
-                    <Forms.FormText>
-                        If some servers “don’t show”, leave auto-refresh ON and hit Reload once.
-                        Discord sometimes loads guild data lazily.
-                    </Forms.FormText>
+                    </div>
                 </div>
-            </SectionCard>
+            </Card>
         </div>
     );
 
     return (
         <ModalRoot {...props} size={ModalSize.LARGE}>
-            <div style={{ padding: 0, display: "flex", flexDirection: "column", gap: 0 }}>
-                {/* Sticky header */}
-                <div
-                    style={{
-                        position: "sticky",
-                        top: 0,
-                        zIndex: 2,
-                        background: "var(--background-primary)",
-                        borderBottom: "1px solid var(--background-modifier-accent)"
-                    }}
-                >
-                    {Header}
-                </div>
+            <div style={S.modal}>
+                <div style={S.stickyTop}>{Header}</div>
 
-                {/* Body */}
-                <div style={{ padding: 0 }}>
-                    {tab === "servers" ? ServersTab : tab === "log" ? LogTab : SettingsTab}
-                </div>
+                {tab === "servers" ? ServersTab : tab === "run" ? RunTab : SettingsTab}
 
-                {/* Sticky footer */}
-                <div style={{ position: "sticky", bottom: 0, zIndex: 2 }}>
-                    {Footer}
-                </div>
+                <div style={S.stickyBottom}>{Footer}</div>
             </div>
         </ModalRoot>
     );
@@ -726,16 +605,16 @@ function BulkLeaveModal(props: any) {
 
 export default definePlugin({
     name: "BulkLeaveGuild",
-    description: "The best bulk leave tool: live refresh, filters, sorting, safety confirm, and clear logging.",
-    authors: [{ name: "You", id: 0n }],
+    description: "Bulk-leave servers with search, filters, sorting, safety confirmation, progress, and a clean log.",
+    authors: [{ name: "Norskish", id: 0n }],
 
     settingsAboutComponent: () => (
         <>
             <Forms.FormTitle tag="h3">Bulk Leave Servers</Forms.FormTitle>
             <Forms.FormText>
-                Opens the bulk leave tool (with filters, sorting, safety confirmation, and logs).
+                A clean, manual bulk-leave tool with safety confirmation and rate-limit-friendly behavior.
             </Forms.FormText>
-            <Button style={{ marginTop: 8 }} onClick={() => openModal(p => <BulkLeaveModal {...p} />)}>
+            <Button style={{ marginTop: 8 }} onClick={() => openModal(p => <BulkLeaveModal {...p} />)} color={Button.Colors.RED}>
                 Open Bulk Leave Tool
             </Button>
         </>
